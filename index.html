@@ -251,14 +251,26 @@ function makeVoice(){
   };
 }
 
+// ---- Free-fight limit: a random id per device, plus an owner code for unlimited fights ----
+const deviceId=(()=>{let d=store.get('device','');if(!/^[A-Za-z0-9-]{8,64}$/.test(d)){d=(window.crypto&&crypto.randomUUID)?crypto.randomUUID():Date.now().toString(36)+'-'+Math.random().toString(36).slice(2,12);store.set('device',d);}return d;})();
+try{const m=location.hash.match(/^#owner=([A-Za-z0-9_-]{8,64})$/);if(m){store.set('owner',m[1]);history.replaceState(null,'',location.pathname+location.search);}}catch(e){}
+let left=null,freeLimit=2;
+const idHeaders=()=>({'x-device-id':deviceId,'x-owner-code':store.get('owner','')});
+const applyLimit=d=>{if(!d)return;if(typeof d.limit==='number')freeLimit=d.limit;left=d.owner?null:(typeof d.remaining==='number'?d.remaining:null);};
+
 async function callJudge(){
-  const r=await fetch('/api/judge',{method:'POST',headers:{'content-type':'application/json','x-passcode':store.get('pass','')},
+  const r=await fetch('/api/judge',{method:'POST',headers:{'content-type':'application/json','x-passcode':store.get('pass',''),...idHeaders()},
     body:JSON.stringify({red:nameOf('red'),blue:nameOf('blue'),topic:topic.value.trim(),lines:st.lines})});
   const data=await r.json().catch(()=>({}));
   if(r.status===401)throw{code:'passcode'};
+  if(r.status===403&&data.code==='limit'){applyLimit(data);throw{code:'limit',reason:data.reason};}
   if(r.status===429)throw{code:'rate_limited'};
   if(!r.ok)throw{code:'server',message:data.error};
+  applyLimit(data);
   return data;
+}
+function refreshLimit(){
+  fetch('/api/judge',{headers:idHeaders()}).then(r=>r.ok?r.json():null).then(d=>{applyLimit(d);renderCorners();}).catch(()=>{});
 }
 
 const nRed=$('#nRed'),nBlue=$('#nBlue'),topic=$('#topic'),say=$('#say'),log=$('#log'),res=$('#res'),note=$('#note'),live=$('#live'),judgeBtn=$('#judge'),resetBtn=$('#reset');
@@ -308,7 +320,7 @@ function renderCorners(){
   }
   $('#sayForm').dataset.side=st.side;
   say.placeholder=`Type ${nameOf(st.side)}'s line…`;
-  judgeBtn.disabled=st.busy;judgeBtn.textContent=st.busy?'Judging…':'Judge it';
+  judgeBtn.disabled=st.busy;judgeBtn.textContent=st.busy?'Judging…':(left==null?'Judge it':`Judge it · ${left} left`);
 }
 function renderLog(){
   $('#sampleNote').hidden=!st.sample;
@@ -426,9 +438,9 @@ function renderResult(r){
   res.hidden=false;
 }
 
-function showWait(title,text,withPass){
+function showWait(title,text,withPass,withOwner){
   res.hidden=false;
-  res.innerHTML=`<div class="wait"><p class="cond">${esc(title)}</p><p>${esc(text)}</p>${withPass?'<form class="row" id="passForm"><label class="sr" for="pass">Passcode</label><input class="field" id="pass" type="password" placeholder="Passcode" autocomplete="current-password"><button class="btn" type="submit">Unlock</button></form>':''}</div>`;
+  res.innerHTML=`<div class="wait"><p class="cond">${esc(title)}</p><p>${esc(text)}</p>${withPass?'<form class="row" id="passForm"><label class="sr" for="pass">Passcode</label><input class="field" id="pass" type="password" placeholder="Passcode" autocomplete="current-password"><button class="btn" type="submit">Unlock</button></form>':''}${withOwner?'<form class="row" id="ownerForm"><label class="sr" for="ownerCode">Owner code</label><input class="field" id="ownerCode" type="password" placeholder="Owner code" autocomplete="off"><button class="btn" type="submit">Unlock</button></form>':''}</div>`;
 }
 
 async function judge(){
@@ -443,6 +455,7 @@ async function judge(){
   }catch(e){
     const c=e&&e.code;
     if(c==='passcode')showWait('Locked','This judge needs the passcode you set on the server.',true);
+    else if(c==='limit')showWait('Out of free fights',e.reason==='network'?'This Wi-Fi network has used up today’s free fights. Try again tomorrow or switch to cellular data.':`Every phone gets ${freeLimit} free fights, and this one has used them. Thanks for playing!`,false,true);
     else showWait('No decision',c==='rate_limited'?'The judges need a minute. Try again shortly.':(e&&e.message)?`Something went wrong: ${e.message}`:'The scorecards came back garbled. Tap Judge it to try again.');
   }
   st.busy=false;renderCorners();
@@ -474,8 +487,8 @@ resetBtn.addEventListener('click',()=>{
 });
 judgeBtn.addEventListener('click',judge);
 res.addEventListener('submit',e=>{
-  if(e.target.id!=='passForm')return;
-  e.preventDefault();store.set('pass',$('#pass').value);judge();
+  if(e.target.id==='passForm'){e.preventDefault();store.set('pass',$('#pass').value);judge();}
+  else if(e.target.id==='ownerForm'){e.preventDefault();store.set('owner',$('#ownerCode').value.trim());refreshLimit();judge();}
 });
 res.addEventListener('click',e=>{
   const b=e.target.closest('button');if(!b||!st.result)return;
@@ -495,6 +508,7 @@ if(dict)hookDict(dict);
 if(voice)voice.onState(({state})=>{speaking=state==='speaking';const b=document.getElementById('spk');if(b)b.textContent=speaking?'Stop':'Hear the announcer';});
 renderCorners();renderLog();renderLive();
 if(st.result)renderResult(st.result);
+refreshLimit();
 }
 </script>
 </body>
