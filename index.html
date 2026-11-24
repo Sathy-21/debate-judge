@@ -379,9 +379,11 @@ function score(v){
     best:b&&sd(b.side)&&S(b.quote)?{side:b.side,quote:S(b.quote),why:S(b.why)}:null,
     fouls:(Array.isArray(v.fouls)?v.fouls:[]).filter(f=>f&&sd(f.side)&&S(f.type)).slice(0,4).map(f=>({side:f.side,type:S(f.type),quote:S(f.quote),note:S(f.note)})),
     facts:(Array.isArray(v.fact_checks)?v.fact_checks:[]).filter(f=>f&&sd(f.side)&&S(f.claim)).slice(0,4).map(f=>({side:f.side,claim:S(f.claim),verdict:VER.includes(f.verdict)?f.verdict:'Unverifiable',note:S(f.note)})),
-    advice:{red:S(v.advice&&v.advice.red),blue:S(v.advice&&v.advice.blue)}};
+    advice:{red:S(v.advice&&v.advice.red),blue:S(v.advice&&v.advice.blue)},
+    model:S(v.models&&v.models.judges)};
 }
 
+const prettyModel=id=>{const p=String(id).replace(/^claude-/,'').split('-');return p.length?'Claude '+p[0].charAt(0).toUpperCase()+p[0].slice(1)+(p.length>1?' '+p.slice(1).join('.'):''):String(id)};
 const winLine=r=>r.winner==='draw'?r.decision:`Winner by ${r.decision==='TKO'?'TKO':r.decision.toLowerCase()}`;
 function resultText(r){
   const R=nameOf('red'),B=nameOf('blue'),t=topic.value.trim();
@@ -415,7 +417,7 @@ function renderResult(r){
       ${r.headline?`<p class="hl">${esc(r.headline)}</p>`:''}
       <div class="acts">${voice?'<button class="btn" id="spk" type="button">Hear the announcer</button>':''}<button class="btn" id="copy" type="button">Copy result</button><button class="btn" id="again" type="button">Rematch</button></div>
     </div>
-    <h3>The judges</h3>${judges}
+    <h3>The judges</h3>${r.model?`<p class="fine">Three independent ${esc(prettyModel(r.model))} judges, each scoring on their own without seeing the others.</p>`:''}${judges}
     ${r.best?`<h3>Best punch</h3><div class="punch ${r.best.side}"><span class="who t-${r.best.side}">${esc(nameOf(r.best.side))}</span><q>${esc(r.best.quote)}</q>${r.best.why?`<p>${esc(r.best.why)}</p>`:''}</div>`:''}
     <h3>Fouls</h3>${fouls}
     <h3>Fact check</h3>${facts}
@@ -434,7 +436,7 @@ async function judge(){
   if(st.listening&&dict)await dict.stop();
   if(!st.lines.some(l=>l.s==='red')||!st.lines.some(l=>l.s==='blue')){msg('Both corners need to say something before the judges can score it.');return;}
   st.busy=true;msg('');renderCorners();
-  showWait('The judges are scoring…','Logic, evidence and crowd appeal, from three different judges.');
+  showWait('The judges are scoring…','Three judges are scoring logic, evidence and crowd appeal separately, at the same time.');
   try{res.scrollIntoView({behavior:'smooth',block:'start'})}catch(e){}
   try{
     st.result=score(await callJudge());save();renderResult(st.result);

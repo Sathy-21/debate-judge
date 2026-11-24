@@ -7,11 +7,14 @@ Works on iPhone (Safari), Android and desktop.
 ## How it works
 
 - **Live transcription:** the browser's built-in speech recognition (Web Speech API), so there's no audio upload and no extra API. It auto-restarts when iOS ends a session, guards against Safari re-sending results it already sent, and when you tap the other corner mid-sentence, it gives the words so far to the person who was talking.
-- **Judging:** `api/judge.js` is a serverless function. It builds the prompt on the server, so the page can't be used to run arbitrary prompts, and calls the Claude API. Three judges score each person from 0 to 10:
-  - *The Logician:* reasoning
-  - *The Fact-Checker:* evidence and accuracy
-  - *The Crowd:* persuasion and humor
-- **Deterministic verdict:** Claude only gives the scores. The page counts the judges and decides unanimous, split or majority decision, draw or TKO, so the verdict always matches the scorecards.
+- **Judging:** `api/judge.js` is a serverless function. It builds every prompt on the server, so the page can't be used to run arbitrary prompts. Judging runs in three stages:
+  1. **Independent judges, in parallel.** Three separate Claude Opus calls run at the same time. Each one sees only the transcript, not the other judges' scores, so split decisions are real disagreements. Each judge scores both people from 0 to 10 on one thing and also returns its specialty:
+     - *The Logician:* reasoning, plus fouls
+     - *The Fact-Checker:* evidence and accuracy, plus fact checks
+     - *The Crowd:* persuasion and humor, plus the best line
+  2. **Deterministic verdict.** Code, not the model, turns the three cards into a unanimous, split or majority decision, draw or TKO, so the verdict always matches the scorecards.
+  3. **Announcer.** A final Claude Sonnet call gets the official result and writes the headline, a coaching tip for each person, and the roast, so the story can't contradict the score.
+- **Resilience:** each judge retries once if it fails, a fight still gets scored if two of the three judges come back, and the announcer falls back to a plain headline if it fails.
 - **Announcer:** reads the scorecards out loud using the device's built-in text-to-speech.
 - **No database:** the current fight is saved in `localStorage` on your phone.
 
@@ -40,4 +43,6 @@ Or use `vercel dev` with the Vercel CLI.
 |---|---|---|
 | `ANTHROPIC_API_KEY` | yes | Your Claude API key, kept on the server only |
 | `APP_PASSCODE` | no | Requires a passcode before judging |
-| `MODEL` | no | Defaults to `claude-sonnet-5-5`; `claude-haiku-5-5` is faster and cheaper |
+| `JUDGE_MODEL` | no | Model for the three judges. Defaults to `claude-opus-5-5`; `claude-fable-5-2` is the strongest and `claude-sonnet-5-5` is the fastest |
+| `JUDGE_EFFORT` | no | How hard the judges think: `low`, `medium` (default) or `high` |
+| `ANNOUNCER_MODEL` | no | Model for the headline, coaching and roast. Defaults to `claude-sonnet-5-5` |
