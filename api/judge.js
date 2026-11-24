@@ -8,6 +8,10 @@
 //       JUDGE_MODEL      (optional) default claude-opus-5-5   (MODEL also accepted)
 //       JUDGE_EFFORT     (optional) low | medium | high, default medium
 //       ANNOUNCER_MODEL  (optional) default claude-sonnet-5-5
+//       OWNER_CODE       (optional) unlimited fights for whoever sends this code
+//       FREE_FIGHTS      (optional) fights per device, default 2
+//       NETWORK_FIGHTS_PER_DAY (optional) backstop per IP per day, default 10
+//       UPSTASH_REDIS_REST_URL / _TOKEN or KV_REST_API_URL / _TOKEN — set by the Vercel Upstash integration
 
 const crypto = require('crypto');
 
@@ -15,6 +19,57 @@ const JUDGE_MODEL = process.env.JUDGE_MODEL || process.env.MODEL || 'claude-opus
 const JUDGE_EFFORT = process.env.JUDGE_EFFORT || 'medium';
 const ANNOUNCER_MODEL = process.env.ANNOUNCER_MODEL || 'claude-sonnet-5-5';
 const CALL_TIMEOUT_MS = 45000;
+
+// ---- Fight limits (Upstash Redis over REST, no SDK needed) ----
+const REDIS_URL = process.env.UPSTASH_REDIS_REST_URL || process.env.KV_REST_API_URL;
+const REDIS_TOKEN = process.env.UPSTASH_REDIS_REST_TOKEN || process.env.KV_REST_API_TOKEN;
+const FREE_FIGHTS = Math.max(0, Number(process.env.FREE_FIGHTS || 2));
+const NETWORK_FIGHTS_PER_DAY = Math.max(1, Number(process.env.NETWORK_FIGHTS_PER_DAY || 10));
+
+async function redis(commands) {
+  if (!REDIS_URL || !REDIS_TOKEN) return null; // limits off if no database is connected
+  const r = await fetch(REDIS_URL.replace(/\/$/, '') + '/pipeline', {
+    method: 'POST',
+    headers: { Authorization: `Bearer ${REDIS_TOKEN}`, 'content-type': 'application/json' },
+    body: JSON.stringify(commands),
+  });
+  if (!r.ok) throw new Error(`Redis error ${r.status}`);
+  const out = await r.json();
+  return out.map(x => { if (x.error) throw new Error(x.error); return x.result; });
+}
+
+const sha = s => crypto.createHash('sha256').update(String(s)).digest('hex').slice(0, 32);
+function limitKeys(req) {
+  const ip = String(req.headers['x-real-ip'] || String(req.headers['x-forwarded-for'] || '').split(',')[0] || 'unknown').trim();
+  const dev = String(req.headers['x-device-id'] || '').replace(/[^A-Za-z0-9-]/g, '').slice(0, 64);
+  return { ipKey: 'dj:ip:' + sha(ip), devKey: 'dj:dev:' + sha(dev || 'ip:' + ip) };
+}
+
+function isOwner(req) {
+  const want = process.env.OWNER_CODE;
+  if (!want) return false;
+  const a = Buffer.from(String(req.headers['x-owner-code'] || ''));
+  const b = Buffer.from(want);
+  return a.length === b.length && crypto.timingSafeEqual(a, b);
+}
+
+// Atomically take one fight for this device and network; hand it back if over a limit.
+async function reserveFight(keys) {
+  const res = await redis([
+    ['SET', keys.ipKey, '0', 'EX', '86400', 'NX'],
+    ['INCR', keys.ipKey],
+    ['INCR', keys.devKey],
+  ]);
+  if (!res) return { ok: true, remaining: null };
+  const ipCount = Number(res[1]);
+  const devCount = Number(res[2]);
+  if (devCount > FREE_FIGHTS || ipCount > NETWORK_FIGHTS_PER_DAY) {
+    await redis([['DECR', keys.ipKey], ['DECR', keys.devKey]]);
+    return { ok: false, reason: devCount > FREE_FIGHTS ? 'device' : 'network', remaining: Math.max(0, FREE_FIGHTS - (devCount - 1)) };
+  }
+  return { ok: true, remaining: FREE_FIGHTS - devCount };
+}
+const releaseFight = keys => redis([['DECR', keys.ipKey], ['DECR', keys.devKey]]).catch(() => {});
 
 const clean = (s, max) => String(s ?? '').replace(/[\u0000-\u001f\u007f]/g, ' ').replace(/\s+/g, ' ').trim().slice(0, max);
 const clamp = x => { x = Math.round(Number(x)); return Number.isFinite(x) ? Math.max(0, Math.min(10, x)) : 0; };
@@ -176,8 +231,22 @@ function passOk(given) {
 }
 
 module.exports = async function handler(req, res) {
+  const owner = isOwner(req);
+  const keys = limitKeys(req);
+
+  // GET: how many free fights this device has left (no fight is used).
+  if (req.method === 'GET') {
+    if (owner) return res.status(200).json({ owner: true, limit: FREE_FIGHTS, remaining: null });
+    try {
+      const r = await redis([['GET', keys.devKey]]);
+      if (!r) return res.status(200).json({ owner: false, limit: FREE_FIGHTS, remaining: null });
+      return res.status(200).json({ owner: false, limit: FREE_FIGHTS, remaining: Math.max(0, FREE_FIGHTS - Number(r[0] || 0)) });
+    } catch {
+      return res.status(200).json({ owner: false, limit: FREE_FIGHTS, remaining: null });
+    }
+  }
   if (req.method !== 'POST') {
-    res.setHeader('Allow', 'POST');
+    res.setHeader('Allow', 'GET, POST');
     return res.status(405).json({ error: 'Use POST' });
   }
   if (!passOk(req.headers['x-passcode'])) return res.status(401).json({ error: 'Passcode required' });
@@ -202,10 +271,33 @@ module.exports = async function handler(req, res) {
     lines,
   };
 
+  // 0) Free-fight limit, checked before any Claude call so blocked fights cost nothing.
+  let reserved = null;
+  if (!owner) {
+    try {
+      reserved = await reserveFight(keys);
+    } catch {
+      reserved = { ok: true, remaining: null }; // database hiccup: don't block the fight
+    }
+    if (!reserved.ok) {
+      return res.status(403).json({
+        code: 'limit',
+        reason: reserved.reason,
+        limit: FREE_FIGHTS,
+        remaining: reserved.remaining,
+        error: reserved.reason === 'network'
+          ? 'This network has used up today’s free fights.'
+          : `Every phone gets ${FREE_FIGHTS} free fights, and this one has used them.`,
+      });
+    }
+  }
+  const giveBack = () => { if (reserved && reserved.remaining !== null) return releaseFight(keys); };
+
   // 1) Fan out: three independent judges, in parallel. None sees the others' scores.
   const settled = await Promise.allSettled(JUDGES.map(j => runJudge(j, input)));
   const cards = settled.filter(s => s.status === 'fulfilled').map(s => s.value);
   if (cards.length < 2) {
+    await giveBack(); // a failed fight doesn't count
     const err = settled.find(s => s.status === 'rejected').reason;
     const status = err.status === 429 || err.status === 529 ? 429 : 502;
     return res.status(status).json({ error: err.message || 'The judges could not score this fight' });
@@ -236,6 +328,9 @@ module.exports = async function handler(req, res) {
     advice: ann.advice && typeof ann.advice === 'object' ? { red: clean(ann.advice.red, 300), blue: clean(ann.advice.blue, 300) } : {},
     roast: clean(ann.roast, 300),
     models: { judges: JUDGE_MODEL, announcer: ANNOUNCER_MODEL },
+    owner,
+    limit: FREE_FIGHTS,
+    remaining: owner ? null : (reserved ? reserved.remaining : null),
   });
 };
 
