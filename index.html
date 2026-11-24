@@ -326,7 +326,10 @@ const save=()=>store.set('state',{red:nRed.value,blue:nBlue.value,topic:topic.va
 const msg=t=>{note.textContent=t||''};
 
 // ---- Desktop-only fight scene: two original sorcerers act out the judges' scorecards ----
-const bigScreen=()=>{try{return matchMedia('(min-width: 900px) and (hover: hover) and (pointer: fine)').matches&&!matchMedia('(prefers-reduced-motion: reduce)').matches}catch(e){return false}};
+const desktopScreen=()=>{try{return matchMedia('(min-width: 900px) and (hover: hover) and (pointer: fine)').matches}catch(e){return false}};
+const reducedMotion=()=>{try{return matchMedia('(prefers-reduced-motion: reduce)').matches}catch(e){return false}};
+// Auto-play only on desktop with motion allowed; with "reduce motion" on, the fight plays only on request.
+const bigScreen=()=>desktopScreen()&&!reducedMotion();
 const Fight=(()=>{
   const box=$('#arena'),NS='http://www.w3.org/2000/svg',X={red:360,blue:600},Y=372;
   let token=0,waiting=false,spar=null,last=null,release=null;
@@ -513,7 +516,9 @@ const Fight=(()=>{
       spar=(async()=>{await sleep(900);let i=0;while(waiting&&t===token){await attack(i++%2?'blue':'red',true);await sleep(380);}})();},
     // scorecards are in: play one round per judge, then the verdict. Resolves when done or skipped.
     finish(r){last=r;waiting=false;const t=token;return new Promise(res=>{release=res;(async()=>{if(spar)await spar;if(t!==token)return;mount();await run(r,t);})();});},
-    hide(){token++;waiting=false;last=null;box.hidden=true;box.innerHTML='';settle();}
+    hide(){token++;waiting=false;last=null;box.hidden=true;box.innerHTML='';settle();},
+    // play the fight for a result on request (e.g. "reduce motion" is on, so it didn't auto-play)
+    watch(r){last=r;replay();}
   };
 })();
 
@@ -654,7 +659,7 @@ function renderResult(r){
       <h2>${esc(W==='draw'?'Nobody':nameOf(W))}</h2>
       <p class="sc"><span>${esc(R)}</span> ${r.tr} – ${r.tb} <span>${esc(B)}</span></p>
       ${r.headline?`<p class="hl">${esc(r.headline)}</p>`:''}
-      <div class="acts">${voice?'<button class="btn" id="spk" type="button">Hear the announcer</button>':''}<button class="btn" id="copy" type="button">Copy result</button><button class="btn" id="again" type="button">Rematch</button></div>
+      <div class="acts">${desktopScreen()&&reducedMotion()?'<button class="btn" id="watch" type="button">Watch the fight</button>':''}${voice?'<button class="btn" id="spk" type="button">Hear the announcer</button>':''}<button class="btn" id="copy" type="button">Copy result</button><button class="btn" id="again" type="button">Rematch</button></div>
     </div>
     <h3>The judges</h3>${r.model?`<p class="fine">Three independent ${esc(prettyModel(r.model))} judges, each scoring on their own without seeing the others.</p>`:''}${judges}
     ${r.best?`<h3>Best punch</h3><div class="punch ${r.best.side}"><span class="who t-${r.best.side}">${esc(nameOf(r.best.side))}</span><q>${esc(r.best.quote)}</q>${r.best.why?`<p>${esc(r.best.why)}</p>`:''}</div>`:''}
@@ -733,6 +738,8 @@ res.addEventListener('click',e=>{
   }else if(b.id==='again'){
     if(st.listening&&dict)dict.stop();
     clearFight();try{window.scrollTo({top:0,behavior:'smooth'})}catch(err){}
+  }else if(b.id==='watch'){
+    Fight.watch(st.result);try{$('#arena').scrollIntoView({behavior:'smooth',block:'center'})}catch(err){}
   }else if(b.id==='spk'&&voice){
     if(speaking){voice.stop();return;}
     voice.speak(announce(st.result)).catch(()=>{});
