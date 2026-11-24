@@ -1,0 +1,12 @@
+{
+  "name": "debate-judge",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Argue with a friend out loud; Claude scores it like a fight.",
+  "scripts": {
+    "dev": "node dev-server.js"
+  },
+  "engines": {
+    "node": ">=18"
+  }
+}

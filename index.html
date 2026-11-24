@@ -1,0 +1,499 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="theme-color" content="#c91f37">
+<meta name="description" content="Argue with a friend, and Claude scores it like a fight.">
+<title>Debate Judge</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Barlow+Condensed:wght@700;800&family=Barlow:wght@400;500;600&display=swap" rel="stylesheet">
+<style>
+/* VOICE: fight-night announcer — playful, fair, quick
+   IDEA: a boxing judges' scorecard, but for an argument between friends
+   PICTURE: red and blue corners you tap whenever that person has the floor
+   COLOUR and TYPE: red corner, blue corner, clean white mat; Barlow Condensed poster type with Barlow text
+   LAYOUT: corners up top, the fight as alternating rounds, verdict band in the winner's colour */
+:root{color-scheme:light dark;
+  --bg:light-dark(#ffffff,#111214);--ink:light-dark(#141416,#f2f2f3);--mut:light-dark(#5b5e66,#a4a7ae);
+  --line:light-dark(#e3e3e7,#2b2c31);--card:light-dark(#f3f3f5,#1c1d21);
+  --red:light-dark(#c91f37,#ff5d70);--blue:light-dark(#1f56c8,#6b97ff);
+  --redS:#c91f37;--blueS:#1f56c8;
+  --redbg:light-dark(#fdedef,#2a1519);--bluebg:light-dark(#ebf1fd,#141c2f)}
+:root[data-theme=light]{color-scheme:light}:root[data-theme=dark]{color-scheme:dark}
+*{box-sizing:border-box;min-width:0}
+body{margin:0;background:var(--bg);color:var(--ink);font:16px/1.55 Barlow,system-ui,sans-serif;overflow-x:clip}
+.wrap{max-width:640px;margin:0 auto;padding:20px max(4vw,14px) 130px}
+h1,h2,h3,.cond{font-family:"Barlow Condensed",Impact,sans-serif;font-weight:800;line-height:1.05;margin:0}
+h1{font-size:38px}
+.top{display:flex;align-items:baseline;justify-content:space-between;gap:4px 14px;flex-wrap:wrap;margin-bottom:16px}
+.top p{margin:0;color:var(--mut);font-size:15px}
+.sr{position:absolute;width:1px;height:1px;overflow:hidden;clip:rect(0 0 0 0)}
+.ring{display:grid;grid-template-columns:minmax(0,1fr) 40px minmax(0,1fr);gap:8px;align-items:stretch}
+.corner{--c:var(--red);--cs:var(--redS);--cbg:var(--redbg);border-radius:18px;padding:12px;display:flex;flex-direction:column;gap:8px;background:var(--cbg);border:2px solid transparent;transition:border-color .2s}
+.corner.blue{--c:var(--blue);--cs:var(--blueS);--cbg:var(--bluebg)}
+.corner.on{border-color:var(--c)}
+.corner label{font-size:13px;font-weight:600;color:var(--c)}
+.corner input{font:800 26px/1.1 "Barlow Condensed",sans-serif;color:var(--ink);background:transparent;border:0;border-bottom:2px solid color-mix(in srgb,var(--c) 35%,transparent);border-radius:0;padding:2px 0 4px;width:100%}
+.corner input::placeholder{color:color-mix(in srgb,var(--ink) 35%,transparent)}
+.corner input:focus{outline:none;border-bottom-color:var(--c)}
+.floor{appearance:none;border:0;border-radius:14px;background:var(--cs);color:#fff;min-height:136px;padding:14px 8px;font:inherit;cursor:pointer;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:4px;position:relative;box-shadow:0 6px 0 color-mix(in srgb,var(--cs) 55%,#000);transition:transform .08s,box-shadow .08s;-webkit-tap-highlight-color:transparent}
+.floor:active{transform:translateY(4px);box-shadow:0 2px 0 color-mix(in srgb,var(--cs) 55%,#000)}
+.floor:focus-visible{outline:3px solid var(--ink);outline-offset:3px}
+.floor b{font:800 25px/1 "Barlow Condensed",sans-serif;text-align:center}
+.floor small{font-size:13px;opacity:.92}
+.corner.live .floor::after{content:"";position:absolute;inset:-7px;border-radius:19px;border:3px solid var(--c);animation:pulse 1.4s ease-out infinite;opacity:0;pointer-events:none}
+@keyframes pulse{0%{opacity:.85;transform:scale(.97)}100%{opacity:0;transform:scale(1.05)}}
+@media (prefers-reduced-motion:reduce){.corner.live .floor::after{animation:none;opacity:.7;transform:none}}
+.vs{align-self:center;justify-self:center;font:800 20px/1 "Barlow Condensed",sans-serif;width:40px;height:40px;border-radius:50%;display:grid;place-items:center;background:var(--ink);color:var(--bg)}
+.row{display:flex;gap:8px;margin-top:12px}
+input.field{flex:1;font:16px Barlow,sans-serif;padding:11px 14px;border-radius:12px;border:1px solid var(--line);background:var(--card);color:var(--ink);min-height:48px}
+input.field:focus-visible{outline:2px solid var(--ink);outline-offset:1px}
+.btn{min-height:48px;padding:0 16px;border-radius:12px;border:1px solid var(--line);background:var(--card);color:var(--ink);font:600 15px Barlow,sans-serif;cursor:pointer;flex:none}
+.btn:focus-visible,.judge:focus-visible{outline:3px solid var(--c,var(--ink));outline-offset:2px}
+.say[data-side=red]{--c:var(--red)}.say[data-side=blue]{--c:var(--blue)}
+.say[data-side=red] .send{background:var(--redS);color:#fff;border-color:transparent}
+.say[data-side=blue] .send{background:var(--blueS);color:#fff;border-color:transparent}
+.livebox{margin-top:12px;padding:12px 14px;border-radius:12px;background:var(--card);min-height:50px;color:var(--mut);font-size:15px}
+.livebox.on{color:var(--ink)}
+.note{color:var(--mut);font-size:14px;margin:8px 2px 0}
+.note:empty{display:none}
+.t-red{color:var(--red)}.t-blue{color:var(--blue)}
+.bg-red{background:var(--red)}.bg-blue{background:var(--blue)}
+.who{font:700 15px "Barlow Condensed",sans-serif}
+h3{font-size:26px;margin:28px 0 10px}
+.log{list-style:none;margin:0;padding:0;display:flex;flex-direction:column;gap:10px}
+.log li{--c:var(--red);--cbg:var(--redbg);max-width:88%;padding:9px 46px 10px 14px;border-radius:4px 16px 16px 16px;background:var(--cbg);position:relative;align-self:flex-start}
+.log li.blue{--c:var(--blue);--cbg:var(--bluebg);align-self:flex-end;border-radius:16px 4px 16px 16px}
+.log li .who{color:var(--c)}
+.log li p{margin:1px 0 0;overflow-wrap:anywhere}
+.log .x{position:absolute;top:0;right:0;width:44px;height:44px;border:0;background:none;color:var(--mut);cursor:pointer;font-size:20px;border-radius:12px}
+.log .x:focus-visible{outline:2px solid var(--c)}
+.log li.empty{max-width:none;align-self:stretch;background:var(--card);color:var(--mut);border-radius:14px;padding:16px}
+.bar{position:fixed;left:0;right:0;bottom:0;padding:10px max(4vw,14px) calc(10px + env(safe-area-inset-bottom));background:color-mix(in srgb,var(--bg) 90%,transparent);-webkit-backdrop-filter:blur(10px);backdrop-filter:blur(10px);border-top:1px solid var(--line);z-index:5}
+.bar .in{max-width:640px;margin:0 auto;display:flex;gap:8px}
+.judge{flex:1;min-height:52px;border-radius:14px;border:0;background:var(--ink);color:var(--bg);font:800 23px "Barlow Condensed",sans-serif;cursor:pointer}
+.judge[disabled]{opacity:.5;cursor:progress}
+.res{margin-top:30px;scroll-margin-top:16px}
+.wait{border-radius:20px;padding:26px 18px;background:var(--card);text-align:center}
+.wait .cond{font-size:30px}.wait p{margin:6px 0 0;color:var(--mut)}
+.verdict{border-radius:22px;padding:22px 18px 20px;color:#fff;text-align:center;background:var(--redS)}
+.verdict.blue{background:var(--blueS)}
+.verdict.draw{background:linear-gradient(100deg,var(--redS) 50%,var(--blueS) 50%)}
+.verdict .k{margin:0;font-weight:600;font-size:15px;opacity:.92}
+.verdict h2{font-size:clamp(42px,12vw,64px);margin:6px 0 2px;text-wrap:balance;overflow-wrap:anywhere}
+.verdict .sc{margin:0;font:800 26px "Barlow Condensed",sans-serif;font-variant-numeric:tabular-nums}
+.verdict .sc span{font-weight:700;opacity:.85}
+.verdict .hl{margin:12px auto 0;max-width:36ch;font-size:17px;text-wrap:balance}
+.acts{display:flex;flex-wrap:wrap;gap:8px;justify-content:center;margin-top:18px}
+.acts .btn{background:rgba(255,255,255,.16);color:#fff;border-color:rgba(255,255,255,.55)}
+.jrow{padding:14px 0;border-bottom:1px solid var(--line)}
+.jrow:last-child{border-bottom:0}
+.jh{display:flex;justify-content:space-between;gap:10px;align-items:baseline}
+.jh b{font:800 21px "Barlow Condensed",sans-serif}
+.num{font-weight:600;font-variant-numeric:tabular-nums;text-align:right;white-space:nowrap}
+.bars{display:grid;grid-template-columns:minmax(0,6.5em) minmax(0,1fr) 22px;gap:6px 10px;align-items:center;margin:8px 0 6px;font-size:14px}
+.bars .nm{white-space:nowrap;overflow:hidden;text-overflow:ellipsis;font-weight:600}
+.track{height:10px;border-radius:5px;background:var(--card);overflow:hidden}
+.track i{display:block;height:100%;border-radius:5px}
+.jn{margin:0;color:var(--mut);font-size:15px}
+.punch{--c:var(--red);--cbg:var(--redbg);border-left:5px solid var(--c);background:var(--cbg);border-radius:0 16px 16px 0;padding:14px 16px}
+.punch.blue{--c:var(--blue);--cbg:var(--bluebg)}
+.punch q{display:block;font:700 22px/1.2 "Barlow Condensed",sans-serif;quotes:"\201C" "\201D"}
+.punch p{margin:6px 0 0;font-size:15px}
+.list{list-style:none;margin:0;padding:0;display:grid;gap:10px}
+.list li{background:var(--card);border-radius:14px;padding:12px 14px}
+.lh{display:flex;justify-content:space-between;gap:10px;align-items:baseline;flex-wrap:wrap}
+.lh b{font-weight:600}
+.list q{display:block;margin-top:4px;font-style:italic}
+.list p{margin:4px 0 0;color:var(--mut);font-size:15px}
+.tag{display:inline-block;font-size:13px;font-weight:600;padding:2px 9px;border-radius:999px;border:1px solid var(--ink);white-space:nowrap}
+.tag.v-True{background:var(--ink);color:var(--bg)}
+.tag.v-False{text-decoration:line-through}
+.tag.v-Unverifiable{border-style:dashed;color:var(--mut);border-color:var(--mut)}
+.fine{color:var(--mut);font-size:13px;margin:8px 2px 0}
+.adv{display:grid;grid-template-columns:minmax(0,1fr) minmax(0,1fr);gap:10px}
+.adv div{border-radius:14px;padding:12px 14px;background:var(--redbg)}
+.adv div.blue{background:var(--bluebg)}
+.adv p{margin:2px 0 0;font-size:15px}
+.roast{margin:22px 0 0;text-align:center;font:700 22px/1.25 "Barlow Condensed",sans-serif;text-wrap:balance}
+@media(max-width:600px){.adv{grid-template-columns:minmax(0,1fr)}h1{font-size:34px}}
+@media(max-width:380px){.corner{padding:10px}.corner input{font-size:22px}.floor b{font-size:22px}.ring{grid-template-columns:minmax(0,1fr) 32px minmax(0,1fr);gap:6px}.vs{width:32px;height:32px;font-size:17px}}
+</style>
+</head>
+<body>
+<main class="wrap">
+  <header class="top">
+    <h1>Debate Judge</h1>
+    <p>Tap whoever's talking. Claude scores it like a fight.</p>
+  </header>
+
+  <section class="ring" aria-label="The two corners">
+    <div class="corner red" id="cRed">
+      <label for="nRed">Red corner</label>
+      <input id="nRed" maxlength="20" placeholder="Name" autocomplete="off" spellcheck="false">
+      <button class="floor" id="fRed" type="button" aria-pressed="false"><b>Tap to talk</b><small id="kRed">0 turns</small></button>
+    </div>
+    <div class="vs" aria-hidden="true">vs</div>
+    <div class="corner blue" id="cBlue">
+      <label for="nBlue">Blue corner</label>
+      <input id="nBlue" maxlength="20" placeholder="Name" autocomplete="off" spellcheck="false">
+      <button class="floor" id="fBlue" type="button" aria-pressed="false"><b>Tap to talk</b><small id="kBlue">0 turns</small></button>
+    </div>
+  </section>
+
+  <div class="row">
+    <label class="sr" for="topic">Topic</label>
+    <input class="field" id="topic" placeholder="What's the argument?" maxlength="120" autocomplete="off">
+    <button class="btn" id="shuffle" type="button">Random</button>
+  </div>
+
+  <div class="livebox" id="live" aria-live="polite"></div>
+  <form class="row say" id="sayForm" data-side="red">
+    <label class="sr" for="say">Add a line</label>
+    <input class="field" id="say" placeholder="Type a line…" autocomplete="off" enterkeyhint="send">
+    <button class="btn send" type="submit">Add</button>
+  </form>
+  <p class="note" id="note" role="status"></p>
+
+  <h3>The fight</h3>
+  <p class="note" id="sampleNote" hidden>Sample argument loaded so you can see a verdict. Tap a corner or New fight to start your own.</p>
+  <ol class="log" id="log"></ol>
+
+  <section class="res" id="res" hidden aria-live="polite"></section>
+</main>
+
+<div class="bar"><div class="in">
+  <button class="btn" id="reset" type="button">New fight</button>
+  <button class="judge" id="judge" type="button">Judge it</button>
+</div></div>
+
+<script>
+{
+const $=s=>document.querySelector(s);
+const esc=s=>String(s??'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+const other=s=>s==='red'?'blue':'red';
+const words=t=>String(t||'').trim().split(/\s+/).filter(Boolean);
+const norm=t=>String(t||'').replace(/\s+/g,' ').trim();
+const TOPICS=['Is a hot dog a sandwich?','LeBron or Jordan: who is the GOAT?','Pineapple belongs on pizza','Is cereal a soup?','Tabs or spaces?','Python or C++ for coding interviews','Is a CS degree still worth it?','Best fast food chain in America','Should you text back right away?','Is pre-workout a scam?','Is water wet?','Morning workouts beat night workouts','Messi or Ronaldo?','Breakfast is the most important meal','Is a taco a sandwich?','Dogs or cats?'];
+const SAMPLE={red:'Sam',blue:'Alex',topic:'Is a hot dog a sandwich?',lines:[
+  {s:'red',t:"A hot dog is a sandwich. It's meat inside bread. That's literally the definition of a sandwich."},
+  {s:'blue',t:"By that logic a taco is a sandwich. Nobody walks into Taco Bell and orders a sandwich."},
+  {s:'red',t:"The USDA literally counts hot dogs as sandwiches, look it up."},
+  {s:'blue',t:"The National Hot Dog and Sausage Council says it's not a sandwich, and they would know. Also it's one piece of bread, not two."},
+  {s:'red',t:"A sub is one piece of bread too and everyone calls that a sandwich. Bro, trust me, it's a sandwich."},
+  {s:'blue',t:"A sub is cut to be a sandwich. A hot dog bun is its own thing. You're just mad you lost the last argument."}]};
+const store={get(k,d){try{const v=localStorage.getItem('dj_'+k);return v==null?d:JSON.parse(v)}catch(e){return d}},set(k,v){try{localStorage.setItem('dj_'+k,JSON.stringify(v))}catch(e){}}};
+
+// ---- Speech to text: Safari / Chrome Web Speech API, auto-restarting, with iOS duplicate guards ----
+function makeDictation(){
+  const SR=window.SpeechRecognition||window.webkitSpeechRecognition;
+  if(!SR)return null;
+  let rec=null,want=false,acc='',interim='',seen=new Set(),err='',waiters=[];
+  const cb={p(){},f(){},s(){}};
+  const strip=t=>{t=norm(t);return acc&&t.toLowerCase().startsWith(acc.toLowerCase())?t.slice(acc.length).trim():t;};
+  const flush=()=>{const w=waiters;waiters=[];w.forEach(f=>f());};
+  const make=()=>{
+    const r=new SR();
+    r.lang=(navigator.language||'').toLowerCase().startsWith('en')?navigator.language:'en-US';
+    r.continuous=true;r.interimResults=true;r.maxAlternatives=1;
+    r.onstart=()=>{acc='';interim='';seen=new Set();cb.s({state:'listening'});};
+    r.onresult=e=>{
+      let live='';
+      for(let i=e.resultIndex;i<e.results.length;i++){
+        const x=e.results[i],raw=norm(x[0]&&x[0].transcript);
+        if(x.isFinal){
+          if(seen.has(i))continue;seen.add(i);
+          const add=strip(raw);
+          acc=acc&&raw.toLowerCase().startsWith(acc.toLowerCase())?raw:norm(acc+' '+raw);
+          interim='';if(add)cb.f({text:add});
+        }else live+=' '+raw;
+      }
+      live=strip(live);interim=live;if(live)cb.p({text:live});
+    };
+    r.onerror=e=>{if(e.error==='not-allowed'||e.error==='service-not-allowed'){want=false;err='not_granted';}else if(e.error!=='no-speech'&&e.error!=='aborted')err=e.error;};
+    r.onend=()=>{
+      if(interim){const t=interim;interim='';cb.f({text:t});}
+      if(want&&!err){try{r.start();return;}catch(x){}}
+      want=false;cb.s({state:'idle',reason:err||'stopped'});err='';flush();
+    };
+    return r;
+  };
+  return{
+    start(){want=true;err='';if(!rec)rec=make();try{rec.start();}catch(e){}return Promise.resolve();},
+    stop(){want=false;return new Promise(res=>{waiters.push(res);try{rec?rec.stop():flush();}catch(e){flush();}setTimeout(flush,1500);});},
+    onPartial(f){cb.p=f},onFinal(f){cb.f=f},onState(f){cb.s=f}
+  };
+}
+
+// ---- Announcer voice: built-in speech synthesis (works on iPhone after a tap) ----
+function makeVoice(){
+  const S=window.speechSynthesis;
+  if(!S||!window.SpeechSynthesisUtterance)return null;
+  let cb=()=>{};
+  const pick=()=>{const v=S.getVoices()||[];return v.find(x=>/^en-US/i.test(x.lang)&&/Aaron|Fred|Daniel|Alex|Google US/i.test(x.name))||v.find(x=>/^en-US/i.test(x.lang))||v.find(x=>/^en/i.test(x.lang))||null;};
+  return{
+    speak(lines){
+      return new Promise((resolve,reject)=>{
+        S.cancel();const v=pick();
+        lines.forEach((l,i)=>{
+          const u=new SpeechSynthesisUtterance(l.text);if(v)u.voice=v;u.lang='en-US';u.rate=i===0?.95:1;u.pitch=.9;
+          if(i===0)u.onstart=()=>cb({state:'speaking'});
+          if(i===lines.length-1)u.onend=()=>{cb({state:'idle',reason:'completed'});resolve();};
+          u.onerror=e=>{cb({state:'idle',reason:'error'});reject({code:e.error});};
+          S.speak(u);
+        });
+      });
+    },
+    stop(){S.cancel();cb({state:'idle',reason:'viewer_stopped'});},
+    onState(f){cb=f}
+  };
+}
+
+async function callJudge(){
+  const r=await fetch('/api/judge',{method:'POST',headers:{'content-type':'application/json','x-passcode':store.get('pass','')},
+    body:JSON.stringify({red:nameOf('red'),blue:nameOf('blue'),topic:topic.value.trim(),lines:st.lines})});
+  const data=await r.json().catch(()=>({}));
+  if(r.status===401)throw{code:'passcode'};
+  if(r.status===429)throw{code:'rate_limited'};
+  if(!r.ok)throw{code:'server',message:data.error};
+  return data;
+}
+
+const nRed=$('#nRed'),nBlue=$('#nBlue'),topic=$('#topic'),say=$('#say'),log=$('#log'),res=$('#res'),note=$('#note'),live=$('#live'),judgeBtn=$('#judge'),resetBtn=$('#reset');
+const st={lines:[],side:'red',listening:false,partial:'',phraseSide:null,consumed:0,busy:false,result:null,sample:false,armed:0};
+let dict=makeDictation(),voice=makeVoice(),speaking=false;
+
+const saved=store.get('state',null);
+if(saved&&Array.isArray(saved.lines)){
+  nRed.value=saved.red||'';nBlue.value=saved.blue||'';topic.value=saved.topic||'';
+  st.lines=saved.lines.filter(l=>l&&(l.s==='red'||l.s==='blue')&&typeof l.t==='string');
+  st.result=saved.result||null;st.sample=!!saved.sample;
+}else{
+  nRed.value=SAMPLE.red;nBlue.value=SAMPLE.blue;topic.value=SAMPLE.topic;
+  st.lines=SAMPLE.lines.map(l=>({...l}));st.sample=true;
+}
+
+const nameOf=s=>((s==='red'?nRed:nBlue).value.trim()||(s==='red'?'Red':'Blue'));
+const save=()=>store.set('state',{red:nRed.value,blue:nBlue.value,topic:topic.value,lines:st.lines,result:st.result,sample:st.sample});
+const msg=t=>{note.textContent=t||''};
+
+function addLine(s,t){
+  t=String(t||'').trim();if(!t)return;
+  const last=st.lines[st.lines.length-1];
+  if(last&&last.s===s)last.t+=' '+t;else st.lines.push({s,t});
+  save();renderLog();renderCorners();
+}
+function clearFight(){
+  st.lines=[];st.result=null;st.sample=false;st.partial='';st.phraseSide=null;st.consumed=0;
+  res.hidden=true;res.innerHTML='';save();renderLog();renderCorners();renderLive();
+}
+function clearSample(){
+  if(nRed.value===SAMPLE.red)nRed.value='';
+  if(nBlue.value===SAMPLE.blue)nBlue.value='';
+  if(topic.value===SAMPLE.topic)topic.value='';
+  clearFight();
+}
+
+function renderCorners(){
+  for(const s of ['red','blue']){
+    const C=s==='red'?'Red':'Blue',el=$('#c'+C),b=$('#f'+C);
+    const on=st.side===s,n=st.lines.filter(l=>l.s===s).length,hot=on&&st.listening;
+    el.classList.toggle('on',on);el.classList.toggle('live',hot);
+    b.querySelector('b').textContent=hot?'Listening':(on&&!dict?'Has the floor':'Tap to talk');
+    $('#k'+C).textContent=hot?'Tap to pause':`${n} ${n===1?'turn':'turns'}`;
+    b.setAttribute('aria-pressed',on?'true':'false');
+    b.setAttribute('aria-label',`${nameOf(s)}: ${hot?'listening, tap to pause':'tap when they talk'}`);
+  }
+  $('#sayForm').dataset.side=st.side;
+  say.placeholder=`Type ${nameOf(st.side)}'s line…`;
+  judgeBtn.disabled=st.busy;judgeBtn.textContent=st.busy?'Judging…':'Judge it';
+}
+function renderLog(){
+  $('#sampleNote').hidden=!st.sample;
+  if(!st.lines.length){log.innerHTML='<li class="empty">No punches thrown yet. Tap a corner and start arguing.</li>';return;}
+  log.innerHTML=st.lines.map((l,i)=>`<li class="${l.s}"><span class="who">${esc(nameOf(l.s))}</span><p>${esc(l.t)}</p><button class="x" type="button" data-i="${i}" aria-label="Delete this line">×</button></li>`).join('');
+}
+function renderLive(){
+  const s=st.phraseSide||st.side;
+  if(st.partial){live.classList.add('on');live.innerHTML=`<span class="who t-${s}">${esc(nameOf(s))}</span> ${esc(st.partial)}`;return;}
+  live.classList.remove('on');
+  live.textContent=st.listening?`Listening for ${nameOf(st.side)}…`:(dict?'Tap a corner to start the mic. Tap the other corner when they jump in.':'Voice isn’t available in this browser, so tap a corner and type, or use the mic on your keyboard.');
+}
+
+function hookDict(d){
+  d.onPartial(({text})=>{
+    if(st.phraseSide==null)st.phraseSide=st.side;
+    st.partial=words(text).slice(st.consumed).join(' ');renderLive();
+  });
+  d.onFinal(({text})=>{
+    const s=st.phraseSide||st.side,rest=words(text).slice(st.consumed).join(' ');
+    st.consumed=0;st.phraseSide=null;st.partial='';
+    if(rest)addLine(s,rest);renderLive();
+  });
+  d.onState(({state,reason})=>{
+    st.listening=state==='listening';
+    if(!st.listening&&reason==='not_granted'){dict=null;msg('Mic or speech recognition was blocked. In Safari, tap aA in the address bar, open Website Settings and allow the microphone, then reload. Or just type.');}
+    else if(!st.listening&&reason&&reason!=='stopped'&&reason!=='viewer_stopped')msg('The mic stopped. Tap a corner to keep going.');
+    renderCorners();renderLive();
+  });
+}
+
+function floor(s){
+  if(st.sample)clearSample();
+  msg('');
+  if(dict){
+    if(st.listening){
+      if(st.side===s){dict.stop();return;}
+      if(st.partial&&st.phraseSide&&st.phraseSide!==s){
+        const w=words(st.partial).length;addLine(st.phraseSide,st.partial);
+        st.consumed+=w;st.partial='';st.phraseSide=s;
+      }else if(!st.partial)st.phraseSide=null;
+      st.side=s;renderCorners();renderLive();return;
+    }
+    st.side=s;dict.start();st.listening=true;renderCorners();renderLive();return;
+  }
+  st.side=s;renderCorners();renderLive();say.focus();
+}
+
+function score(v){
+  if(!v||typeof v!=='object')throw new Error('bad shape');
+  const n=x=>{x=Math.round(Number(x));return Number.isFinite(x)?Math.max(0,Math.min(10,x)):0};
+  const sd=x=>x==='red'||x==='blue'?x:null;
+  const S=x=>typeof x==='string'?x.slice(0,400):'';
+  const names=['The Logician','The Fact-Checker','The Crowd'];
+  const J=(Array.isArray(v.judges)?v.judges:[]).slice(0,3).map((j,i)=>({name:S(j&&j.name)||names[i],red:n(j&&j.red),blue:n(j&&j.blue),note:S(j&&j.note)}));
+  if(!J.length)throw new Error('no judges');
+  let rw=0,bw=0,tr=0,tb=0;
+  for(const j of J){tr+=j.red;tb+=j.blue;if(j.red>j.blue)rw++;else if(j.blue>j.red)bw++;}
+  let winner,decision;
+  if(rw===bw){winner='draw';decision=rw===0?'Draw':'Split draw';}
+  else{
+    winner=rw>bw?'red':'blue';const lo=Math.min(rw,bw),hi=Math.max(rw,bw),margin=Math.abs(tr-tb);
+    decision=hi===J.length?(margin>=8?'TKO':'Unanimous decision'):(lo>0?'Split decision':'Majority decision');
+  }
+  const b=v.best_punch;
+  const VER=['True','False','Misleading','Unverifiable'];
+  return {winner,decision,tr,tb,J,headline:S(v.headline),roast:S(v.roast),
+    best:b&&sd(b.side)&&S(b.quote)?{side:b.side,quote:S(b.quote),why:S(b.why)}:null,
+    fouls:(Array.isArray(v.fouls)?v.fouls:[]).filter(f=>f&&sd(f.side)&&S(f.type)).slice(0,4).map(f=>({side:f.side,type:S(f.type),quote:S(f.quote),note:S(f.note)})),
+    facts:(Array.isArray(v.fact_checks)?v.fact_checks:[]).filter(f=>f&&sd(f.side)&&S(f.claim)).slice(0,4).map(f=>({side:f.side,claim:S(f.claim),verdict:VER.includes(f.verdict)?f.verdict:'Unverifiable',note:S(f.note)})),
+    advice:{red:S(v.advice&&v.advice.red),blue:S(v.advice&&v.advice.blue)}};
+}
+
+const winLine=r=>r.winner==='draw'?r.decision:`Winner by ${r.decision==='TKO'?'TKO':r.decision.toLowerCase()}`;
+function resultText(r){
+  const R=nameOf('red'),B=nameOf('blue'),t=topic.value.trim();
+  const head=r.winner==='draw'?`${r.decision}!`:`${nameOf(r.winner)} wins by ${r.decision==='TKO'?'TKO':r.decision.toLowerCase()}`;
+  return [`Debate Judge: ${R} vs ${B}${t?` on "${t}"`:''}`,`${head} (${R} ${r.tr}, ${B} ${r.tb})`,...r.J.map(j=>`${j.name}: ${R} ${j.red}, ${B} ${j.blue}`),r.headline,r.roast].filter(Boolean).join('\n');
+}
+function announce(r){
+  const L=[{text:'Ladies and gentlemen, we go to the scorecards.'}];
+  for(const j of r.J){
+    const hi=j.red>j.blue?'red':j.blue>j.red?'blue':null;
+    L.push({text:hi?`${j.name} scores it ${Math.max(j.red,j.blue)} to ${Math.min(j.red,j.blue)}, ${nameOf(hi)}.`:`${j.name} scores it even, ${j.red} to ${j.blue}.`});
+  }
+  L.push({text:r.winner==='draw'?`This one is a ${r.decision.toLowerCase()}! Nobody takes home the belt tonight.`:`And your winner, by ${r.decision==='TKO'?'technical knockout':r.decision.toLowerCase()}... ${nameOf(r.winner)}!`});
+  if(r.headline)L.push({text:r.headline.slice(0,300)});
+  return L;
+}
+
+function renderResult(r){
+  const R=nameOf('red'),B=nameOf('blue'),W=r.winner;
+  const judges=r.J.map(j=>`<div class="jrow"><div class="jh"><b>${esc(j.name)}</b><span class="num">${j.red}–${j.blue}</span></div>
+    <div class="bars"><span class="nm t-red">${esc(R)}</span><span class="track"><i class="bg-red" style="width:${j.red*10}%"></i></span><span class="num">${j.red}</span>
+    <span class="nm t-blue">${esc(B)}</span><span class="track"><i class="bg-blue" style="width:${j.blue*10}%"></i></span><span class="num">${j.blue}</span></div>
+    ${j.note?`<p class="jn">${esc(j.note)}</p>`:''}</div>`).join('');
+  const fouls=r.fouls.length?`<ul class="list">${r.fouls.map(f=>`<li><div class="lh"><b>${esc(f.type)}</b><span class="who t-${f.side}">${esc(nameOf(f.side))}</span></div>${f.quote?`<q>${esc(f.quote)}</q>`:''}${f.note?`<p>${esc(f.note)}</p>`:''}</li>`).join('')}</ul>`:'<p class="jn">Clean fight. No fouls called.</p>';
+  const facts=r.facts.length?`<ul class="list">${r.facts.map(f=>`<li><div class="lh"><b>${esc(f.claim)}</b><span class="tag v-${f.verdict}">${f.verdict}</span></div><p><span class="who t-${f.side}">${esc(nameOf(f.side))}</span> · ${esc(f.note)}</p></li>`).join('')}</ul><p class="fine">Fact checks come from Claude's general knowledge and can miss very recent stats.</p>`:'<p class="jn">No checkable facts were thrown. Pure vibes.</p>';
+  const adv=(r.advice.red||r.advice.blue)?`<h3>Corner advice</h3><div class="adv">${['red','blue'].filter(s=>r.advice[s]).map(s=>`<div class="${s}"><span class="who t-${s}">${esc(nameOf(s))}</span><p>${esc(r.advice[s])}</p></div>`).join('')}</div>`:'';
+  res.innerHTML=`<div class="verdict ${W}">
+      <p class="k">${esc(winLine(r))}</p>
+      <h2>${esc(W==='draw'?'Nobody':nameOf(W))}</h2>
+      <p class="sc"><span>${esc(R)}</span> ${r.tr} – ${r.tb} <span>${esc(B)}</span></p>
+      ${r.headline?`<p class="hl">${esc(r.headline)}</p>`:''}
+      <div class="acts">${voice?'<button class="btn" id="spk" type="button">Hear the announcer</button>':''}<button class="btn" id="copy" type="button">Copy result</button><button class="btn" id="again" type="button">Rematch</button></div>
+    </div>
+    <h3>The judges</h3>${judges}
+    ${r.best?`<h3>Best punch</h3><div class="punch ${r.best.side}"><span class="who t-${r.best.side}">${esc(nameOf(r.best.side))}</span><q>${esc(r.best.quote)}</q>${r.best.why?`<p>${esc(r.best.why)}</p>`:''}</div>`:''}
+    <h3>Fouls</h3>${fouls}
+    <h3>Fact check</h3>${facts}
+    ${adv}
+    ${r.roast?`<p class="roast">${esc(r.roast)}</p>`:''}`;
+  res.hidden=false;
+}
+
+function showWait(title,text,withPass){
+  res.hidden=false;
+  res.innerHTML=`<div class="wait"><p class="cond">${esc(title)}</p><p>${esc(text)}</p>${withPass?'<form class="row" id="passForm"><label class="sr" for="pass">Passcode</label><input class="field" id="pass" type="password" placeholder="Passcode" autocomplete="current-password"><button class="btn" type="submit">Unlock</button></form>':''}</div>`;
+}
+
+async function judge(){
+  if(st.busy)return;
+  if(st.listening&&dict)await dict.stop();
+  if(!st.lines.some(l=>l.s==='red')||!st.lines.some(l=>l.s==='blue')){msg('Both corners need to say something before the judges can score it.');return;}
+  st.busy=true;msg('');renderCorners();
+  showWait('The judges are scoring…','Logic, evidence and crowd appeal, from three different judges.');
+  try{res.scrollIntoView({behavior:'smooth',block:'start'})}catch(e){}
+  try{
+    st.result=score(await callJudge());save();renderResult(st.result);
+  }catch(e){
+    const c=e&&e.code;
+    if(c==='passcode')showWait('Locked','This judge needs the passcode you set on the server.',true);
+    else showWait('No decision',c==='rate_limited'?'The judges need a minute. Try again shortly.':(e&&e.message)?`Something went wrong: ${e.message}`:'The scorecards came back garbled. Tap Judge it to try again.');
+  }
+  st.busy=false;renderCorners();
+}
+
+$('#fRed').addEventListener('click',()=>floor('red'));
+$('#fBlue').addEventListener('click',()=>floor('blue'));
+for(const el of [nRed,nBlue,topic])el.addEventListener('input',()=>{save();renderLog();renderCorners();renderLive();if(st.result&&el!==topic)renderResult(st.result);});
+$('#shuffle').addEventListener('click',()=>{let t;do{t=TOPICS[Math.floor(Math.random()*TOPICS.length)]}while(t===topic.value&&TOPICS.length>1);topic.value=t;save();});
+$('#sayForm').addEventListener('submit',e=>{
+  e.preventDefault();
+  const t=say.value.trim();if(!t)return;
+  if(st.sample)clearSample();
+  const s=st.side;addLine(s,t);say.value='';
+  if(!st.listening)st.side=other(s);
+  renderCorners();renderLive();
+});
+log.addEventListener('click',e=>{
+  const b=e.target.closest('.x');if(!b)return;
+  st.lines.splice(Number(b.dataset.i),1);save();renderLog();renderCorners();
+});
+resetBtn.addEventListener('click',()=>{
+  if(st.sample||(!st.lines.length&&!st.result)){clearSample();return;}
+  if(!st.armed){resetBtn.textContent='Tap again to clear';st.armed=setTimeout(()=>{st.armed=0;resetBtn.textContent='New fight'},3000);return;}
+  clearTimeout(st.armed);st.armed=0;resetBtn.textContent='New fight';
+  if(st.listening&&dict)dict.stop();
+  clearFight();
+  try{window.scrollTo({top:0,behavior:'smooth'})}catch(e){}
+});
+judgeBtn.addEventListener('click',judge);
+res.addEventListener('submit',e=>{
+  if(e.target.id!=='passForm')return;
+  e.preventDefault();store.set('pass',$('#pass').value);judge();
+});
+res.addEventListener('click',e=>{
+  const b=e.target.closest('button');if(!b||!st.result)return;
+  if(b.id==='copy'){
+    const done=t=>{b.textContent=t;setTimeout(()=>{b.textContent='Copy result'},1800)};
+    try{navigator.clipboard.writeText(resultText(st.result)).then(()=>done('Copied'),()=>done('Copy failed'))}catch(err){done('Copy failed')}
+  }else if(b.id==='again'){
+    if(st.listening&&dict)dict.stop();
+    clearFight();try{window.scrollTo({top:0,behavior:'smooth'})}catch(err){}
+  }else if(b.id==='spk'&&voice){
+    if(speaking){voice.stop();return;}
+    voice.speak(announce(st.result)).catch(()=>{});
+  }
+});
+
+if(dict)hookDict(dict);
+if(voice)voice.onState(({state})=>{speaking=state==='speaking';const b=document.getElementById('spk');if(b)b.textContent=speaking?'Stop':'Hear the announcer';});
+renderCorners();renderLog();renderLive();
+if(st.result)renderResult(st.result);
+}
+</script>
+</body>
+</html>
