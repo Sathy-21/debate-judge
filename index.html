@@ -463,11 +463,11 @@ log.addEventListener('click',e=>{
   st.lines.splice(Number(b.dataset.i),1);save();renderLog();renderCorners();
 });
 resetBtn.addEventListener('click',()=>{
-  if(st.sample||(!st.lines.length&&!st.result)){clearSample();return;}
+  if(st.sample||(!st.lines.length&&!st.result)){topic.value='';clearSample();return;}
   if(!st.armed){resetBtn.textContent='Tap again to clear';st.armed=setTimeout(()=>{st.armed=0;resetBtn.textContent='New fight'},3000);return;}
   clearTimeout(st.armed);st.armed=0;resetBtn.textContent='New fight';
   if(st.listening&&dict)dict.stop();
-  clearFight();
+  topic.value='';clearFight();
   try{window.scrollTo({top:0,behavior:'smooth'})}catch(e){}
 });
 judgeBtn.addEventListener('click',judge);
