@@ -7,6 +7,7 @@ Works on iPhone (Safari), Android and desktop.
 ## How it works
 
 - **Live transcription:** the browser's built-in speech recognition (Web Speech API), so there's no audio upload and no extra API. It auto-restarts when iOS ends a session, guards against Safari re-sending results it already sent, and when you tap the other corner mid-sentence, it gives the words so far to the person who was talking.
+- **Live judging stream:** each judge "thinks out loud" in JSON Lines as Claude streams its answer: one line for every point it finds for a side, weighted 1 to 3, then its scorecard. The function parses the three parallel Claude streams as they arrive and forwards each point and card to the page as newline-delimited JSON. On desktop, every point becomes an attack in the fight and a health-bar hit the moment the judge finds it, and every finished scorecard triggers a bigger move. The red corner is a fire wizard who casts spells, and the blue corner is a swordsman who throws and summons blades.
 - **Judging:** `api/judge.js` is a serverless function. It builds every prompt on the server, so the page can't be used to run arbitrary prompts. Judging runs in three stages:
   1. **Independent judges, in parallel.** Three separate Claude Opus calls run at the same time. Each one sees only the transcript, not the other judges' scores, so split decisions are real disagreements. Each judge scores both people from 0 to 10 on one thing and also returns its specialty:
      - *The Logician:* reasoning, plus fouls
