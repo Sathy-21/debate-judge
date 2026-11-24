@@ -253,7 +253,9 @@ function makeVoice(){
 
 // ---- Free-fight limit: a random id per device, plus an owner code for unlimited fights ----
 const deviceId=(()=>{let d=store.get('device','');if(!/^[A-Za-z0-9-]{8,64}$/.test(d)){d=(window.crypto&&crypto.randomUUID)?crypto.randomUUID():Date.now().toString(36)+'-'+Math.random().toString(36).slice(2,12);store.set('device',d);}return d;})();
-try{const m=location.hash.match(/^#owner=([A-Za-z0-9_-]{8,64})$/);if(m){store.set('owner',m[1]);history.replaceState(null,'',location.pathname+location.search);}}catch(e){}
+function takeOwnerLink(){try{const m=location.hash.match(/^#owner=([A-Za-z0-9_-]{8,64})$/);if(m){store.set('owner',m[1]);history.replaceState(null,'',location.pathname+location.search);return true;}}catch(e){}return false;}
+takeOwnerLink();
+window.addEventListener('hashchange',()=>{if(takeOwnerLink())refreshLimit();});
 let left=null,freeLimit=2;
 const idHeaders=()=>({'x-device-id':deviceId,'x-owner-code':store.get('owner','')});
 const applyLimit=d=>{if(!d)return;if(typeof d.limit==='number')freeLimit=d.limit;left=d.owner?null:(typeof d.remaining==='number'?d.remaining:null);};
