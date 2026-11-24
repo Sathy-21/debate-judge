@@ -2,6 +2,14 @@
 // the verdict is computed deterministically from their cards, then an announcer
 // call writes the headline, coaching and roast with the verdict in hand.
 //
+// Live mode (request header  Accept: application/x-ndjson): the response is a stream of
+// JSON lines so the page can animate while the judges think:
+//   {"type":"start","judges":[...]}
+//   {"type":"point","judge":"The Logician","side":"red","weight":2,"text":"..."}   as each judge notices something
+//   {"type":"card","judge":"The Logician","red":7,"blue":5,"note":"..."}           when a judge finishes
+//   {"type":"final","result":{...}}  or  {"type":"error","status":502,"error":"..."}
+// Without that header it returns the final result as plain JSON.
+//
 // Body: { red, blue, topic, lines: [{ s: "red" | "blue", t: "text" }] }
 // Env:  ANTHROPIC_API_KEY (required)
 //       APP_PASSCODE     (optional) require a passcode
@@ -19,6 +27,7 @@ const JUDGE_MODEL = process.env.JUDGE_MODEL || process.env.MODEL || 'claude-opus
 const JUDGE_EFFORT = process.env.JUDGE_EFFORT || 'medium';
 const ANNOUNCER_MODEL = process.env.ANNOUNCER_MODEL || 'claude-sonnet-5-5';
 const CALL_TIMEOUT_MS = 45000;
+const MAX_POINTS_PER_JUDGE = 6;
 
 // ---- Fight limits (Upstash Redis over REST, no SDK needed) ----
 const REDIS_URL = process.env.UPSTASH_REDIS_REST_URL || process.env.KV_REST_API_URL;
@@ -112,19 +121,38 @@ ${tx}
 TRANSCRIPT>>>`;
 }
 
+const judgeRules = judge => `Rules:
+- Score how well each person argued on your criteria, not which side you agree with. Someone who barely spoke cannot score high.
+- Give each person a whole number from 0 to 10. Use the full range; don't default to safe middle scores.
+- ${judge.extra}
+- Every quote must be copied word for word from the transcript and be under 15 words.
+- Refer to people by name. Keep the tone playful like a fight judge, never cruel, and never comment on anything personal outside the argument.`;
+
+// Plain prompt: one JSON scorecard (used as a fallback when a live stream fails).
 function judgePrompt(judge, input) {
   return `You are ${judge.name}, one of three independent judges scoring a casual spoken argument between two friends, scored like a boxing match. The other judges cover other aspects, so score ONLY on ${judge.focus}.
 
 ${transcriptBlock(input)}
 
-Rules:
-- Score how well each person argued on your criteria, not which side you agree with. Someone who barely spoke cannot score high.
-- Give each person a whole number from 0 to 10. Use the full range; don't default to safe middle scores.
-- ${judge.extra}
-- Every quote must be copied word for word from the transcript and be under 15 words.
-- Refer to people by name. Keep the tone playful like a fight judge, never cruel, and never comment on anything personal outside the argument.
+${judgeRules(judge)}
 
 Return only JSON, no other text, in exactly this shape:
+{"red":0,"blue":0,"note":"one short sentence explaining your scores",${judge.shape}}`;
+}
+
+// Live prompt: the judge "thinks out loud" in JSON Lines, then gives its scorecard.
+function judgePromptLive(judge, input) {
+  return `You are ${judge.name}, one of three independent judges scoring a casual spoken argument between two friends, scored like a boxing match. The other judges cover other aspects, so score ONLY on ${judge.focus}.
+
+${transcriptBlock(input)}
+
+${judgeRules(judge)}
+
+Output format: JSON Lines. Write one compact JSON object per line and nothing else: no prose, no code fences, no blank lines.
+1. First, 3 to 5 point lines as you weigh the debate, in the order you notice them. Each is one thing that helped one person's case on your criteria:
+{"point":"red or blue","weight":1,"text":"what helped them, under 12 words, using their name"}
+weight is 1 for small, 2 for solid, 3 for big. Your points should be consistent with your final scores.
+2. Then exactly one last line with your scorecard:
 {"red":0,"blue":0,"note":"one short sentence explaining your scores",${judge.shape}}`;
 }
 
@@ -166,51 +194,89 @@ class ClaudeError extends Error {
   constructor(message, status) { super(message); this.status = status; }
 }
 
-async function callClaude({ model, prompt, maxTokens, effort }) {
-  const send = async withEffort => {
-    const ctrl = new AbortController();
-    const timer = setTimeout(() => ctrl.abort(), CALL_TIMEOUT_MS);
-    try {
-      const body = { model, max_tokens: maxTokens, messages: [{ role: 'user', content: prompt }] };
-      if (withEffort && effort) body.output_config = { effort };
-      const r = await fetch('https://api.anthropic.com/v1/messages', {
-        method: 'POST',
-        signal: ctrl.signal,
-        headers: {
-          'x-api-key': process.env.ANTHROPIC_API_KEY,
-          'anthropic-version': '2023-06-01',
-          'content-type': 'application/json',
-        },
-        body: JSON.stringify(body),
-      });
-      const data = await r.json().catch(() => ({}));
-      return { r, data };
-    } finally {
-      clearTimeout(timer);
-    }
+async function claudeRequest({ model, prompt, maxTokens, effort, stream, signal }) {
+  const send = withEffort => {
+    const body = { model, max_tokens: maxTokens, messages: [{ role: 'user', content: prompt }] };
+    if (withEffort && effort) body.output_config = { effort };
+    if (stream) body.stream = true;
+    return fetch('https://api.anthropic.com/v1/messages', {
+      method: 'POST',
+      signal,
+      headers: {
+        'x-api-key': process.env.ANTHROPIC_API_KEY,
+        'anthropic-version': '2023-06-01',
+        'content-type': 'application/json',
+      },
+      body: JSON.stringify(body),
+    });
   };
+  let r = await send(true);
+  if (r.status === 400 && effort) {
+    const text = await r.text();
+    // If this model rejects the effort setting, try once more without it.
+    if (/effort|output_config/i.test(text)) r = await send(false);
+    else { let m = ''; try { m = JSON.parse(text).error.message; } catch {} throw new ClaudeError(m || 'Claude API error 400', 400); }
+  }
+  if (!r.ok) {
+    const data = await r.json().catch(() => ({}));
+    throw new ClaudeError((data.error && data.error.message) || `Claude API error ${r.status}`, r.status);
+  }
+  return r;
+}
 
-  let { r, data } = await send(true);
-  // If this model rejects the effort setting, try once more without it.
-  if (r.status === 400 && effort && /effort|output_config/i.test(JSON.stringify(data))) ({ r, data } = await send(false));
-  if (!r.ok) throw new ClaudeError((data.error && data.error.message) || `Claude API error ${r.status}`, r.status);
-
-  // Newer models can return thinking blocks first: read text blocks by type, never by index.
-  const text = (data.content || []).filter(b => b.type === 'text').map(b => b.text).join('');
+const extractJson = text => {
   const start = text.indexOf('{');
   const end = text.lastIndexOf('}');
   if (start < 0 || end <= start) throw new ClaudeError('No JSON in the reply', 502);
   return JSON.parse(text.slice(start, end + 1));
+};
+
+async function callClaude(opts) {
+  const ctrl = new AbortController();
+  const timer = setTimeout(() => ctrl.abort(), CALL_TIMEOUT_MS);
+  try {
+    const r = await claudeRequest({ ...opts, signal: ctrl.signal });
+    const data = await r.json().catch(() => ({}));
+    // Newer models can return thinking blocks first: read text blocks by type, never by index.
+    const text = (data.content || []).filter(b => b.type === 'text').map(b => b.text).join('');
+    return extractJson(text);
+  } finally {
+    clearTimeout(timer);
+  }
 }
 
-async function runJudge(judge, input) {
-  const prompt = judgePrompt(judge, input);
-  const once = () => callClaude({ model: JUDGE_MODEL, prompt, maxTokens: 8000, effort: JUDGE_EFFORT });
-  let v;
-  try { v = await once(); } catch (e) {
-    if (e.status === 401 || e.status === 403) throw e;
-    v = await once(); // one retry for a flaky or malformed reply
+// Stream a reply, calling onText with each piece of visible text as it arrives.
+async function streamClaude({ onText, ...opts }) {
+  const ctrl = new AbortController();
+  const timer = setTimeout(() => ctrl.abort(), CALL_TIMEOUT_MS);
+  try {
+    const r = await claudeRequest({ ...opts, stream: true, signal: ctrl.signal });
+    const dec = new TextDecoder();
+    let buf = '', full = '';
+    for await (const chunk of r.body) {
+      buf += dec.decode(chunk, { stream: true });
+      let i;
+      while ((i = buf.indexOf('\n')) >= 0) {
+        const line = buf.slice(0, i).trim();
+        buf = buf.slice(i + 1);
+        if (!line.startsWith('data:')) continue;
+        let ev;
+        try { ev = JSON.parse(line.slice(5).trim()); } catch { continue; }
+        if (ev.type === 'content_block_delta' && ev.delta && ev.delta.type === 'text_delta') {
+          full += ev.delta.text;
+          onText(ev.delta.text);
+        } else if (ev.type === 'error') {
+          throw new ClaudeError((ev.error && ev.error.message) || 'Stream error', 502);
+        }
+      }
+    }
+    return full;
+  } finally {
+    clearTimeout(timer);
   }
+}
+
+function cardFrom(judge, v) {
   return {
     name: judge.name,
     red: clamp(v.red),
@@ -220,6 +286,51 @@ async function runJudge(judge, input) {
     fact_checks: Array.isArray(v.fact_checks) ? v.fact_checks.slice(0, 4) : undefined,
     best_punch: v.best_punch && typeof v.best_punch === 'object' ? v.best_punch : undefined,
   };
+}
+
+// One judge, live: forward each point as it is written, then the scorecard.
+async function runJudge(judge, input, emit) {
+  let card = null, points = 0, pending = '';
+  const onLine = raw => {
+    const s = raw.replace(/^```(json)?/i, '').replace(/```$/, '').trim();
+    if (!s.startsWith('{')) return;
+    let o;
+    try { o = JSON.parse(s); } catch { return; }
+    if ((o.point === 'red' || o.point === 'blue') && points < MAX_POINTS_PER_JUDGE) {
+      points++;
+      const weight = Math.max(1, Math.min(3, Math.round(Number(o.weight) || 1)));
+      emit({ type: 'point', judge: judge.name, side: o.point, weight, text: clean(o.text, 120) });
+    } else if (o.red !== undefined && o.blue !== undefined) {
+      card = o;
+    }
+  };
+  let full = '';
+  try {
+    full = await streamClaude({
+      model: JUDGE_MODEL, prompt: judgePromptLive(judge, input), maxTokens: 8000, effort: JUDGE_EFFORT,
+      onText: t => {
+        pending += t;
+        let i;
+        while ((i = pending.indexOf('\n')) >= 0) { onLine(pending.slice(0, i).trim()); pending = pending.slice(i + 1); }
+      },
+    });
+    if (pending.trim()) onLine(pending.trim());
+  } catch (e) {
+    if (e.status === 401 || e.status === 403) throw e;
+  }
+  if (!card && full) {
+    // Scorecard came back spread over several lines: take the last object with both scores.
+    let k = -1;
+    for (const m of full.matchAll(/\{\s*"red"\s*:/g)) k = m.index;
+    if (k >= 0) { try { card = extractJson(full.slice(k)); } catch {} }
+  }
+  if (!card) {
+    // No usable live scorecard: ask once more for just the card.
+    card = await callClaude({ model: JUDGE_MODEL, prompt: judgePrompt(judge, input), maxTokens: 8000, effort: JUDGE_EFFORT });
+  }
+  const out = cardFrom(judge, card);
+  emit({ type: 'card', judge: out.name, red: out.red, blue: out.blue, note: out.note });
+  return out;
 }
 
 function passOk(given) {
@@ -293,14 +404,28 @@ module.exports = async function handler(req, res) {
   }
   const giveBack = () => { if (reserved && reserved.remaining !== null) return releaseFight(keys); };
 
+  const live = String(req.headers.accept || '').includes('application/x-ndjson');
+  if (live) {
+    res.statusCode = 200;
+    res.setHeader('Content-Type', 'application/x-ndjson; charset=utf-8');
+    res.setHeader('Cache-Control', 'no-cache, no-transform');
+    res.setHeader('X-Accel-Buffering', 'no');
+    if (res.flushHeaders) res.flushHeaders();
+  }
+  const emit = ev => { if (live) { try { res.write(JSON.stringify(ev) + '\n'); } catch {} } };
+  const fail = (status, error) => {
+    if (live) { emit({ type: 'error', status, error }); return res.end(); }
+    return res.status(status).json({ error });
+  };
+  emit({ type: 'start', judges: JUDGES.map(j => j.name) });
+
   // 1) Fan out: three independent judges, in parallel. None sees the others' scores.
-  const settled = await Promise.allSettled(JUDGES.map(j => runJudge(j, input)));
+  const settled = await Promise.allSettled(JUDGES.map(j => runJudge(j, input, emit)));
   const cards = settled.filter(s => s.status === 'fulfilled').map(s => s.value);
   if (cards.length < 2) {
     await giveBack(); // a failed fight doesn't count
-    const err = settled.find(s => s.status === 'rejected').reason;
-    const status = err.status === 429 || err.status === 529 ? 429 : 502;
-    return res.status(status).json({ error: err.message || 'The judges could not score this fight' });
+    const err = settled.find(s => s.status === 'rejected').reason || {};
+    return fail(err.status === 429 || err.status === 529 ? 429 : 502, err.message || 'The judges could not score this fight');
   }
 
   // 2) Deterministic verdict from the cards.
@@ -319,7 +444,7 @@ module.exports = async function handler(req, res) {
     : `${winnerName} takes it by ${verdict.decision === 'TKO' ? 'TKO' : verdict.decision.toLowerCase()}.`;
 
   const byName = n => cards.find(c => c.name === n) || {};
-  return res.status(200).json({
+  const result = {
     headline: clean(ann.headline, 300) || fallbackHeadline,
     judges: cards.map(({ name, red, blue, note }) => ({ name, red, blue, note })),
     best_punch: byName('The Crowd').best_punch || null,
@@ -331,8 +456,11 @@ module.exports = async function handler(req, res) {
     owner,
     limit: FREE_FIGHTS,
     remaining: owner ? null : (reserved ? reserved.remaining : null),
-  });
+  };
+  if (live) { emit({ type: 'final', result }); return res.end(); }
+  return res.status(200).json(result);
 };
 
 module.exports.decide = decide;
 module.exports.judgePrompt = judgePrompt;
+module.exports.judgePromptLive = judgePromptLive;
